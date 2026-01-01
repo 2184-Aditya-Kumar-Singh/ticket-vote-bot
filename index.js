@@ -3,23 +3,54 @@ const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.GuildMessageReactions
   ],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// ===== CONFIG (USE ENV VARIABLES) =====
+// ===== CONFIG =====
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // OPEN tickets category
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
 const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
-// =====================================
+const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
+// ==================
 
 // ticketChannelId -> voteMessageId
 const ticketVotes = new Map();
 
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+// ===============================
+// 👋 MEMBER JOIN → WELCOME MESSAGE
+// ===============================
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    const channel = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
+    if (!channel) return;
+
+    await channel.send(
+`👑 **Welcome to Kingdom 3961 Migration Discord** 👑
+
+Hello ${member},
+
+Welcome to **3961 Migration Discord**! We’re glad to have you here as part of our migration process.
+
+To get started, please make sure you read all migration rules, requirements, and timelines carefully.
+
+➡️ **Head over to the Migration Info channel:**  
+🔗 https://discord.com/channels/1456324256861257844/1456324257624887475
+
+If you have any questions after reading, feel free to reach out to the leadership team.
+
+Welcome, and we look forward to building **3961** together. 🚀✨`
+    );
+  } catch (err) {
+    console.error("❌ Welcome message error:", err);
+  }
 });
 
 // ===============================
@@ -49,11 +80,9 @@ client.on(Events.ChannelCreate, async (channel) => {
 
 // ==================================
 // 🔒 TICKET CLOSED → CLOSE VOTE
-// (Channel moved out of category)
 // ==================================
 client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
   try {
-    // Ticket moved out of open category
     if (
       oldChannel.parentId === TICKET_CATEGORY_ID &&
       newChannel.parentId !== TICKET_CATEGORY_ID
