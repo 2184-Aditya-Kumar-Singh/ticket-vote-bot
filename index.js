@@ -30,9 +30,6 @@ const APPROVE_ROLE_ID = process.env.MOVE_ROLE_ID;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
 
-// ================= STORAGE =================
-const ticketVotes = new Map();
-
 // ================= GOOGLE SHEETS =================
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(GOOGLE_CREDS),
@@ -40,11 +37,11 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-async function writeToSheet(data, ticketName, approverMember) {
-  const approvedByName =
-    approverMember.globalName ||
-    approverMember.user.globalName ||
-    approverMember.user.username;
+async function writeToSheet(data, ticketName, approver) {
+  const approvedBy =
+    approver.globalName ||
+    approver.user.globalName ||
+    approver.user.username;
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
@@ -57,7 +54,7 @@ async function writeToSheet(data, ticketName, approverMember) {
         data.kp,
         data.vip,
         ticketName,
-        approvedByName,
+        approvedBy,
         new Date().toLocaleString()
       ]]
     }
@@ -65,94 +62,32 @@ async function writeToSheet(data, ticketName, approverMember) {
 }
 
 // ================= UTIL =================
-function parseTopicData(topic) {
-  if (!topic || !topic.includes("FORM_COMPLETED")) return null;
-
+function parseTopic(topic) {
+  if (!topic) return null;
   const data = {};
-  topic.split("|").forEach(part => {
-    const [k, v] = part.split(":").map(s => s?.trim());
+  topic.split("|").forEach(p => {
+    const [k, v] = p.split(":").map(s => s?.trim());
     if (!v) return;
     if (k === "Name") data.name = v;
     if (k === "Power") data.power = v;
     if (k === "KP") data.kp = v;
     if (k === "VIP") data.vip = v;
   });
-
   return data;
 }
 
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   const commands = [
-    new SlashCommandBuilder()
-      .setName("fill-details")
-      .setDescription("Fill migration details"),
-    new SlashCommandBuilder()
-      .setName("approve")
-      .setDescription("Approve this ticket")
+    new SlashCommandBuilder().setName("fill-details").setDescription("Fill migration details"),
+    new SlashCommandBuilder().setName("approve").setDescription("Approve this ticket")
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
-  await rest.put(
-    Routes.applicationCommands(client.user.id),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
-
-// ================= WELCOME =================
-client.on(Events.GuildMemberAdd, async (member) => {
-  try {
-    const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
-    if (!ch) return;
-
-    await ch.send(
-`👑 **Welcome to Kingdom 3961 Migration Discord** 👑
-
-Hello ${member},
-Please read migration rules carefully.
-
-🔗 https://discord.com/channels/1456324256861257844/1456324257624887475`
-    );
-  } catch {}
-});
-
-// ================= TICKET CREATED =================
-client.on(Events.ChannelCreate, async (channel) => {
-  if (!channel.guild) return;
-  if (channel.parentId !== TICKET_CATEGORY_ID) return;
-  if (!channel.name.startsWith("ticket-")) return;
-
-  const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  const msg = await voteChannel.send(
-    `🗳️ **Vote for ${channel.name.toUpperCase()}**`
-  );
-  await msg.react("✅");
-  await msg.react("❌");
-
-  ticketVotes.set(channel.id, msg.id);
-});
-
-// ================= CLOSE VOTE =================
-async function closeVote(channel) {
-  if (!ticketVotes.has(channel.id)) return;
-
-  const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  const voteMsg = await voteChannel.messages.fetch(
-    ticketVotes.get(channel.id)
-  );
-
-  const yes = (voteMsg.reactions.cache.get("✅")?.count || 1) - 1;
-  const no = (voteMsg.reactions.cache.get("❌")?.count || 1) - 1;
-
-  await voteMsg.edit(
-    `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
-    `✅ Yes: **${yes}**\n❌ No: **${no}**`
-  );
-
-  ticketVotes.delete(channel.id);
-}
 
 // ================= SLASH COMMANDS =================
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -162,97 +97,72 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // ---------- /fill-details ----------
   if (interaction.commandName === "fill-details") {
     if (channel.topic?.includes("FORM_COMPLETED")) {
-      return interaction.reply("✅ Details already completed for this ticket.");
+      return interaction.reply("✅ Details already completed.");
     }
 
-    const questions = [
-      { key: "name", q: "📝 **What is your in-game name?**" },
-      { key: "power", q: "⚡ **What is your current power?**" },
-      { key: "kp", q: "⚔️ **What are your total kill points?**" },
-      { key: "vip", q: "👑 **What is your VIP level?**" }
+    const steps = [
+      { key: "Name", q: "📝 What is your in-game name?" },
+      { key: "Power", q: "⚡ What is your current power?" },
+      { key: "KP", q: "⚔️ What are your total kill points?" },
+      { key: "VIP", q: "👑 What is your VIP level?" }
     ];
 
-    const answers = {};
-    let step = 0;
-
-    await interaction.reply(questions[step].q);
+    let index = 0;
+    await interaction.reply(steps[index].q);
 
     const collector = channel.createMessageCollector({
-      filter: m =>
-        m.author.id === interaction.user.id && !m.author.bot,
+      filter: m => m.author.id === interaction.user.id && !m.author.bot,
       time: 10 * 60 * 1000
     });
 
     collector.on("collect", async (msg) => {
-      answers[questions[step].key] = msg.content.trim();
-      step++;
+      index++;
 
-      if (step < questions.length) {
-        await channel.send(questions[step].q);
+      const existing = parseTopic(channel.topic) || {};
+      existing[steps[index - 1].key.toLowerCase()] = msg.content.trim();
+
+      const topic =
+        `Name:${existing.name || ""} | Power:${existing.power || ""} | KP:${existing.kp || ""} | VIP:${existing.vip || ""}`;
+
+      await channel.setTopic(topic);
+
+      if (index < steps.length) {
+        channel.send(steps[index].q);
       } else {
-        collector.stop("completed");
-      }
-    });
+        await channel.setTopic(`FORM_COMPLETED | ${topic}`);
+        collector.stop();
 
-    collector.on("end", async (_, reason) => {
-      if (reason !== "completed") return;
-
-      // ✅ WRITE TOPIC ONLY AFTER COLLECTION IS COMPLETE
-      await channel.setTopic(
-        `FORM_COMPLETED | Name:${answers.name} | Power:${answers.power} | KP:${answers.kp} | VIP:${answers.vip}`
-      );
-
-      await channel.send(
+        channel.send(
 `✅ **Basic details saved successfully**
 
-📸 **Please now send screenshots of:**
-• Commanders  
-• Equipment  
-• Bag (resources & speedups)  
+📸 Please now send screenshots of:
+• Commanders
+• Equipment
+• Bag (resources & speedups)
 • ROK profile (ID visible)
 
-⏳ **After sending these, please wait for Migration Officers to respond.**`
-      );
+⏳ Please wait for Migration Officers to respond.`
+        );
+      }
     });
   }
 
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
-      return interaction.reply({
-        content: "❌ You do not have permission.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ No permission.", ephemeral: true });
     }
 
-    const data = parseTopicData(channel.topic);
-    if (!data) {
-      return interaction.reply({
-        content: "❌ Form not completed yet.",
-        ephemeral: true
-      });
+    const data = parseTopic(channel.topic);
+    if (!data || !channel.topic.includes("FORM_COMPLETED")) {
+      return interaction.reply({ content: "❌ Form not completed.", ephemeral: true });
     }
 
-    await closeVote(channel);
     await writeToSheet(data, channel.name, interaction.member);
     await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
 
-    await interaction.reply({
-      content: "✅ Ticket approved and logged.",
-      ephemeral: true
-    });
+    interaction.reply({ content: "✅ Ticket approved and logged.", ephemeral: true });
   }
 });
 
-// ================= BACKUP MOVE =================
-client.on(Events.ChannelUpdate, async (oldC, newC) => {
-  if (
-    oldC.parentId === TICKET_CATEGORY_ID &&
-    newC.parentId !== TICKET_CATEGORY_ID
-  ) {
-    await closeVote(newC);
-  }
-});
-
-// ================= LOGIN =================
 client.login(BOT_TOKEN);
