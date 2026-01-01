@@ -21,13 +21,17 @@ const client = new Client({
 
 // ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
-const REJECTED_CATEGORY_ID = process.env.REJECTED_CATEGORY_ID;
-const APPROVE_ROLE_ID = process.env.MOVE_ROLE_ID;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
+const APPROVE_ROLE_ID = process.env.APPROVE_ROLE_ID;
+const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
+const REJECTED_CATEGORY_ID = process.env.REJECTED_CATEGORY_ID;
+const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
 
-// ================= GOOGLE =================
+// ================= VOTE STORAGE =================
+const ticketVotes = new Map(); // ticketChannelId -> voteMessageId
+
+// ================= GOOGLE AUTH =================
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(GOOGLE_CREDS),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"]
@@ -53,10 +57,9 @@ async function findRow(ticketId) {
     spreadsheetId: GOOGLE_SHEET_ID,
     range: "Sheet1!A:A"
   });
-
   const rows = res.data.values || [];
-  const index = rows.findIndex(r => r[0] === ticketId);
-  return index === -1 ? null : index + 1;
+  const idx = rows.findIndex(r => r[0] === ticketId);
+  return idx === -1 ? null : idx + 1;
 }
 
 async function createRow(ticketId) {
@@ -66,53 +69,81 @@ async function createRow(ticketId) {
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
-        ticketId,
-        "", "", "", "",
-        "PENDING",
-        "", "",
-        ""
+        ticketId, "", "", "", "",
+        "PENDING", "", "", ""
       ]]
     }
   });
 }
 
-async function updateCell(row, column, value) {
+async function updateCell(row, col, value) {
   await sheets.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEET_ID,
-    range: `Sheet1!${column}${row}`,
+    range: `Sheet1!${col}${row}`,
     valueInputOption: "USER_ENTERED",
     requestBody: { values: [[value]] }
   });
 }
 
+// ================= VOTE HELPERS =================
+async function closeVote(channel) {
+  const voteMsgId = ticketVotes.get(channel.id);
+  if (!voteMsgId) return;
+
+  try {
+    const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
+    const msg = await voteChannel.messages.fetch(voteMsgId);
+
+    const yes = (msg.reactions.cache.get("✅")?.count || 1) - 1;
+    const no = (msg.reactions.cache.get("❌")?.count || 1) - 1;
+
+    await msg.edit(
+      `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
+      `✅ Yes: **${yes}**\n❌ No: **${no}**`
+    );
+
+    ticketVotes.delete(channel.id);
+  } catch (e) {
+    console.error("Vote close failed:", e);
+  }
+}
+
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   const commands = [
-    new SlashCommandBuilder()
-      .setName("fill-details")
-      .setDescription("Fill migration details"),
-
-    new SlashCommandBuilder()
-      .setName("approve")
-      .setDescription("Approve this ticket"),
-
+    new SlashCommandBuilder().setName("fill-details").setDescription("Fill migration details"),
+    new SlashCommandBuilder().setName("approve").setDescription("Approve this ticket"),
     new SlashCommandBuilder()
       .setName("reject")
       .setDescription("Reject this ticket")
-      .addStringOption(opt =>
-        opt.setName("reason")
-          .setDescription("Reason for rejection (optional)")
-          .setRequired(false)
+      .addStringOption(o =>
+        o.setName("reason").setDescription("Reason (optional)").setRequired(false)
       )
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
-  await rest.put(
-    Routes.applicationCommands(client.user.id),
-    { body: commands }
-  );
+  await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
-  console.log(`✅ Bot ready as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
+
+// ================= CREATE VOTE ON TICKET =================
+client.on(Events.ChannelCreate, async (channel) => {
+  if (!channel.guild) return;
+  if (!channel.name.startsWith("ticket-")) return;
+
+  try {
+    const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
+    const msg = await voteChannel.send(
+      `🗳️ **Vote for ${channel.name.toUpperCase()}**`
+    );
+    await msg.react("✅");
+    await msg.react("❌");
+
+    ticketVotes.set(channel.id, msg.id);
+  } catch (e) {
+    console.error("Vote creation failed:", e);
+  }
 });
 
 // ================= COMMAND HANDLER =================
@@ -129,12 +160,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!row) {
       await createRow(ticketId);
       row = await findRow(ticketId);
-
-      await updateCell(
-        row,
-        COLUMN.DISCORD_USER,
-        interaction.user.username
-      );
+      await updateCell(row, COLUMN.DISCORD_USER, interaction.user.username);
     }
 
     const questions = [
@@ -161,10 +187,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       } else {
         collector.stop();
         channel.send(
-`✅ **Details saved successfully**
+`✅ **Details saved**
 
-📸 Please send required screenshots.
-⏳ Wait for Migration Officers.`
+📸 Please send screenshots of:
+=>Commanders and Equipments
+=>ROK Profile
+=>Bag(Resources and Speedups)
+⏳ Wait for Migration Officers to review and get back to you.`
         );
       }
     });
@@ -186,6 +215,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.user.globalName ||
       interaction.user.username;
 
+    await closeVote(channel);
     await updateCell(row, COLUMN.STATUS, "APPROVED");
     await updateCell(row, COLUMN.APPROVED_BY, officer);
     await updateCell(row, COLUMN.APPROVED_AT, new Date().toLocaleString());
@@ -202,7 +232,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     const reason = interaction.options.getString("reason") || "No reason provided";
     const row = await findRow(ticketId);
-
     if (!row) {
       return interaction.reply({ content: "❌ Ticket not found", ephemeral: true });
     }
@@ -212,6 +241,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.user.globalName ||
       interaction.user.username;
 
+    await closeVote(channel);
     await updateCell(row, COLUMN.STATUS, "REJECTED");
     await updateCell(row, COLUMN.APPROVED_BY, officer);
     await updateCell(row, COLUMN.APPROVED_AT, new Date().toLocaleString());
