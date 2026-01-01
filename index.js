@@ -9,61 +9,79 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// ===== CONFIG =====
+// ===== CONFIG (USE ENV VARIABLES) =====
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // OPEN tickets category
 const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
-// ==================
+// =====================================
 
-const ticketVotes = new Map(); // ticketId -> messageId
+// ticketChannelId -> voteMessageId
+const ticketVotes = new Map();
 
 client.once(Events.ClientReady, () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// 📩 When ticket is created
+// ===============================
+// 📩 TICKET CREATED → CREATE VOTE
+// ===============================
 client.on(Events.ChannelCreate, async (channel) => {
-  if (!channel.guild) return;
-  if (channel.parentId !== TICKET_CATEGORY_ID) return;
-  if (!channel.name.startsWith("ticket-")) return;
-
-  const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  if (!voteChannel) return;
-
-  const msg = await voteChannel.send(
-    `🗳️ **Vote for ${channel.name.toUpperCase()}**`
-  );
-
-  await msg.react("✅");
-  await msg.react("❌");
-
-  ticketVotes.set(channel.id, msg.id);
-});
-
-// ❌ When ticket is closed (channel deleted)
-client.on(Events.ChannelDelete, async (channel) => {
-  if (!ticketVotes.has(channel.id)) return;
-
   try {
+    if (!channel.guild) return;
+    if (channel.parentId !== TICKET_CATEGORY_ID) return;
+    if (!channel.name.startsWith("ticket-")) return;
+
     const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-    const messageId = ticketVotes.get(channel.id);
+    if (!voteChannel) return;
 
-    const voteMessage = await voteChannel.messages.fetch(messageId);
-
-    const yesVotes = voteMessage.reactions.cache.get("✅")?.count - 1 || 0;
-    const noVotes = voteMessage.reactions.cache.get("❌")?.count - 1 || 0;
-
-    await voteMessage.edit(
-      `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
-      `✅ Yes: **${yesVotes}**\n` +
-      `❌ No: **${noVotes}**`
+    const voteMessage = await voteChannel.send(
+      `🗳️ **Vote for ${channel.name.toUpperCase()}**`
     );
 
-    ticketVotes.delete(channel.id);
+    await voteMessage.react("✅");
+    await voteMessage.react("❌");
+
+    ticketVotes.set(channel.id, voteMessage.id);
+  } catch (err) {
+    console.error("❌ Error creating vote:", err);
+  }
+});
+
+// ==================================
+// 🔒 TICKET CLOSED → CLOSE VOTE
+// (Channel moved out of category)
+// ==================================
+client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+  try {
+    // Ticket moved out of open category
+    if (
+      oldChannel.parentId === TICKET_CATEGORY_ID &&
+      newChannel.parentId !== TICKET_CATEGORY_ID
+    ) {
+      if (!ticketVotes.has(oldChannel.id)) return;
+
+      const voteChannel = await newChannel.guild.channels.fetch(VOTE_CHANNEL_ID);
+      if (!voteChannel) return;
+
+      const messageId = ticketVotes.get(oldChannel.id);
+      const voteMessage = await voteChannel.messages.fetch(messageId);
+
+      const yesVotes =
+        (voteMessage.reactions.cache.get("✅")?.count || 1) - 1;
+      const noVotes =
+        (voteMessage.reactions.cache.get("❌")?.count || 1) - 1;
+
+      await voteMessage.edit(
+        `🔒 **VOTING CLOSED — ${newChannel.name.toUpperCase()}**\n\n` +
+        `✅ Yes: **${yesVotes}**\n` +
+        `❌ No: **${noVotes}**`
+      );
+
+      ticketVotes.delete(oldChannel.id);
+    }
   } catch (err) {
     console.error("❌ Error closing vote:", err);
   }
 });
 
 client.login(BOT_TOKEN);
-
