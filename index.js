@@ -40,7 +40,12 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-async function writeToSheet(data, ticketName, approvedBy) {
+async function writeToSheet(data, ticketName, approverMember) {
+  const approvedByName =
+    approverMember.globalName ||
+    approverMember.user.globalName ||
+    approverMember.user.username;
+
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: "Sheet1!A:G",
@@ -52,7 +57,7 @@ async function writeToSheet(data, ticketName, approvedBy) {
         data.kp,
         data.vip,
         ticketName,
-        approvedBy,
+        approvedByName,
         new Date().toLocaleString()
       ]]
     }
@@ -79,12 +84,19 @@ function parseTopicData(topic) {
 // ================= READY =================
 client.once(Events.ClientReady, async () => {
   const commands = [
-    new SlashCommandBuilder().setName("fill-details").setDescription("Fill migration details"),
-    new SlashCommandBuilder().setName("approve").setDescription("Approve this ticket")
+    new SlashCommandBuilder()
+      .setName("fill-details")
+      .setDescription("Fill migration details"),
+    new SlashCommandBuilder()
+      .setName("approve")
+      .setDescription("Approve this ticket")
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
-  await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+  await rest.put(
+    Routes.applicationCommands(client.user.id),
+    { body: commands }
+  );
 
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
@@ -95,11 +107,11 @@ client.on(Events.GuildMemberAdd, async (member) => {
     const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
     if (!ch) return;
 
-    ch.send(
+    await ch.send(
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
 Hello ${member},
-Please read all migration rules carefully.
+Please read migration rules carefully.
 
 🔗 https://discord.com/channels/1456324256861257844/1456324257624887475`
     );
@@ -113,7 +125,9 @@ client.on(Events.ChannelCreate, async (channel) => {
   if (!channel.name.startsWith("ticket-")) return;
 
   const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  const msg = await voteChannel.send(`🗳️ **Vote for ${channel.name.toUpperCase()}**`);
+  const msg = await voteChannel.send(
+    `🗳️ **Vote for ${channel.name.toUpperCase()}**`
+  );
   await msg.react("✅");
   await msg.react("❌");
 
@@ -125,7 +139,9 @@ async function closeVote(channel) {
   if (!ticketVotes.has(channel.id)) return;
 
   const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  const voteMsg = await voteChannel.messages.fetch(ticketVotes.get(channel.id));
+  const voteMsg = await voteChannel.messages.fetch(
+    ticketVotes.get(channel.id)
+  );
 
   const yes = (voteMsg.reactions.cache.get("✅")?.count || 1) - 1;
   const no = (voteMsg.reactions.cache.get("❌")?.count || 1) - 1;
@@ -162,7 +178,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.reply(questions[step].q);
 
     const collector = channel.createMessageCollector({
-      filter: m => m.author.id === interaction.user.id && !m.author.bot,
+      filter: m =>
+        m.author.id === interaction.user.id && !m.author.bot,
       time: 10 * 60 * 1000
     });
 
@@ -171,15 +188,21 @@ client.on(Events.InteractionCreate, async (interaction) => {
       step++;
 
       if (step < questions.length) {
-        channel.send(questions[step].q);
+        await channel.send(questions[step].q);
       } else {
-        await channel.setTopic(
-          `FORM_COMPLETED | Name:${answers.name} | Power:${answers.power} | KP:${answers.kp} | VIP:${answers.vip}`
-        );
+        collector.stop("completed");
+      }
+    });
 
-        collector.stop();
+    collector.on("end", async (_, reason) => {
+      if (reason !== "completed") return;
 
-        channel.send(
+      // ✅ WRITE TOPIC ONLY AFTER COLLECTION IS COMPLETE
+      await channel.setTopic(
+        `FORM_COMPLETED | Name:${answers.name} | Power:${answers.power} | KP:${answers.kp} | VIP:${answers.vip}`
+      );
+
+      await channel.send(
 `✅ **Basic details saved successfully**
 
 📸 **Please now send screenshots of:**
@@ -189,15 +212,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 • ROK profile (ID visible)
 
 ⏳ **After sending these, please wait for Migration Officers to respond.**`
-        );
-      }
+      );
     });
   }
 
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
-      return interaction.reply({ content: "❌ No permission.", ephemeral: true });
+      return interaction.reply({
+        content: "❌ You do not have permission.",
+        ephemeral: true
+      });
     }
 
     const data = parseTopicData(channel.topic);
@@ -209,16 +234,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     await closeVote(channel);
-    await writeToSheet(data, channel.name, interaction.user.tag);
+    await writeToSheet(data, channel.name, interaction.member);
     await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
 
-    interaction.reply({ content: "✅ Ticket approved and logged.", ephemeral: true });
+    await interaction.reply({
+      content: "✅ Ticket approved and logged.",
+      ephemeral: true
+    });
   }
 });
 
 // ================= BACKUP MOVE =================
 client.on(Events.ChannelUpdate, async (oldC, newC) => {
-  if (oldC.parentId === TICKET_CATEGORY_ID && newC.parentId !== TICKET_CATEGORY_ID) {
+  if (
+    oldC.parentId === TICKET_CATEGORY_ID &&
+    newC.parentId !== TICKET_CATEGORY_ID
+  ) {
     await closeVote(newC);
   }
 });
