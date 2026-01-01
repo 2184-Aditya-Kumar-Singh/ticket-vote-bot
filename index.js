@@ -15,7 +15,7 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers // ✅ REQUIRED FOR WELCOME
+    GatewayIntentBits.GuildMembers
   ],
   partials: [Partials.Channel, Partials.Message]
 });
@@ -24,7 +24,8 @@ const client = new Client({
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
-const APPROVE_ROLE_ID = process.env.APPROVE_ROLE_ID;
+
+const APPROVE_ROLE_ID = process.env.MOVE_ROLE_ID; // ✅ FIX
 const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
 const REJECTED_CATEGORY_ID = process.env.REJECTED_CATEGORY_ID;
 const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
@@ -84,7 +85,7 @@ async function updateCell(row, col, value) {
   });
 }
 
-// ================= WELCOME MESSAGE (FIXED) =================
+// ================= WELCOME =================
 client.on(Events.GuildMemberAdd, async (member) => {
   try {
     const channel = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
@@ -94,19 +95,15 @@ client.on(Events.GuildMemberAdd, async (member) => {
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
 Hello ${member},
-Welcome to **3961 Migration Discord**! We’re glad to have you here as part of our migration process.
+Please read all migration rules and info carefully.
 
-📌 **Please read all migration rules, requirements, and timelines carefully.**
+➡️ Migration Info:
+https://discord.com/channels/1456324256861257844/1456324257624887475
 
-➡️ **Migration Info Channel:**
-🔗 https://discord.com/channels/1456324256861257844/1456324257624887475
-
-If you have any questions after reading, feel free to reach out to the leadership team.
-
-🚀✨ **Welcome, and we look forward to building 3961 together!**`
+🚀 Let’s build 3961 together!`
     );
-  } catch (err) {
-    console.error("Welcome message failed:", err);
+  } catch (e) {
+    console.error("Welcome failed:", e);
   }
 });
 
@@ -129,7 +126,7 @@ client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ================= CREATE VOTE ON TICKET =================
+// ================= VOTE CREATE =================
 client.on(Events.ChannelCreate, async (channel) => {
   if (!channel.guild) return;
   if (!channel.name.startsWith("ticket-")) return;
@@ -145,13 +142,33 @@ client.on(Events.ChannelCreate, async (channel) => {
   }
 });
 
-// ================= COMMAND HANDLER =================
+// ================= VOTE CLOSE =================
+async function closeVote(channel) {
+  const voteMsgId = ticketVotes.get(channel.id);
+  if (!voteMsgId) return;
+
+  const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
+  const msg = await voteChannel.messages.fetch(voteMsgId);
+
+  const yes = (msg.reactions.cache.get("✅")?.count || 1) - 1;
+  const no = (msg.reactions.cache.get("❌")?.count || 1) - 1;
+
+  await msg.edit(
+    `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
+    `✅ Yes: ${yes}\n❌ No: ${no}`
+  );
+
+  ticketVotes.delete(channel.id);
+}
+
+// ================= COMMANDS =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   const channel = interaction.channel;
   const ticketId = channel.name;
 
+  // ----- FILL DETAILS -----
   if (interaction.commandName === "fill-details") {
     let row = await findRow(ticketId);
     if (!row) {
@@ -161,10 +178,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const questions = [
-      { col: COLUMN.NAME, q: "📝 What is your in-game name?" },
-      { col: COLUMN.POWER, q: "⚡ What is your current power?" },
-      { col: COLUMN.KP, q: "⚔️ What are your total kill points?" },
-      { col: COLUMN.VIP, q: "👑 What is your VIP level?" }
+      { col: COLUMN.NAME, q: "📝 In-game name?" },
+      { col: COLUMN.POWER, q: "⚡ Power?" },
+      { col: COLUMN.KP, q: "⚔️ Kill points?" },
+      { col: COLUMN.VIP, q: "👑 VIP level?" }
     ];
 
     let step = 0;
@@ -182,11 +199,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
         channel.send(questions[step].q);
       } else {
         collector.stop();
-        channel.send("✅ **Details saved. Please send screenshots of (Commanders, Equipments, VIP, Resources, Speedups and ROK Profile). We will review it and get back to you**");
+        channel.send(
+`✅ **Application details recorded**
+
+📸 Please provide screenshots of:
+• Commanders  
+• Equipment  
+• VIP Level  
+• Resources & Speedups  
+• ROK Profile (ID must be visible)
+
+⏳ Our Migration Officers will review your information and get back to you shortly.`
+);
+
       }
     });
   }
 
+  // ----- APPROVE / REJECT -----
   if (interaction.commandName === "approve" || interaction.commandName === "reject") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
       return interaction.reply({ content: "❌ No permission", ephemeral: true });
@@ -201,7 +231,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       interaction.user.username;
 
     await closeVote(channel);
-    await updateCell(row, COLUMN.STATUS, interaction.commandName === "approve" ? "APPROVED" : "REJECTED");
+
+    await updateCell(row, COLUMN.STATUS,
+      interaction.commandName === "approve" ? "APPROVED" : "REJECTED"
+    );
     await updateCell(row, COLUMN.APPROVED_BY, officer);
     await updateCell(row, COLUMN.APPROVED_AT, new Date().toLocaleString());
 
