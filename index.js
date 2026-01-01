@@ -94,13 +94,17 @@ client.on(Events.GuildMemberAdd, async (member) => {
     await channel.send(
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
-Hello ${member},
-Please read all migration rules and info carefully.
+Hello <@1388225143997726771>,
+Welcome to **3961 Migration Discord**! We’re glad to have you here as part of our migration process.
 
-➡️ Migration Info:
-https://discord.com/channels/1456324256861257844/1456324257624887475
+📌 **Please read all migration rules, requirements, and timelines carefully.**
 
-🚀 Let’s build 3961 together!`
+➡️ **Migration Info Channel:**
+🔗 https://discord.com/channels/1456324256861257844/1456324257624887475
+
+If you have any questions after reading, feel free to reach out to the leadership team.
+
+🚀✨ **Welcome, and we look forward to building 3961 together!**
     );
   } catch (e) {
     console.error("Welcome failed:", e);
