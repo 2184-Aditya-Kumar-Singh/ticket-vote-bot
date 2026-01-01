@@ -13,10 +13,12 @@ const { google } = require("googleapis");
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent // ✅ REQUIRED
   ],
   partials: [Partials.Channel]
 });
+
 
 // ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
