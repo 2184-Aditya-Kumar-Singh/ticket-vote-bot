@@ -16,7 +16,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent // ✅ REQUIRED
   ],
-  partials: [Partials.Channel]
+  partials: [Partials.Channel, Partials.Message]
 });
 
 
@@ -59,7 +59,7 @@ async function findRow(ticketId) {
   return index === -1 ? null : index + 1;
 }
 
-async function createRow(ticketId, discordUser) {
+async function createRow(ticketId) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: "Sheet1!A:I",
@@ -70,11 +70,12 @@ async function createRow(ticketId, discordUser) {
         "", "", "", "",
         "PENDING",
         "", "",
-        discordUser
+        "" // Discord User will be set explicitly
       ]]
     }
   });
 }
+
 
 async function updateCell(row, column, value) {
   await sheets.spreadsheets.values.update({
@@ -119,9 +120,16 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let row = await findRow(ticketId);
 
     if (!row) {
-      await createRow(ticketId, interaction.user.username);
-      row = await findRow(ticketId);
-    }
+  await createRow(ticketId);
+  row = await findRow(ticketId);
+
+  await updateCell(
+    row,
+    COLUMN.DISCORD_USER,
+    interaction.user.username
+  );
+}
+
 
     const questions = [
       { col: COLUMN.NAME, q: "📝 What is your in-game name?" },
