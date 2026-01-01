@@ -198,6 +198,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     });
   }
+client.on(Events.GuildMemberAdd, async (member) => {
+  try {
+    const channel = await member.guild.channels.fetch(
+      process.env.WELCOME_CHANNEL_ID
+    );
+
+    if (!channel) return;
+
+    await channel.send(
+`👑 **Welcome to Kingdom 3961 Migration Discord** 👑
+
+Hello ${member},
+Welcome to **3961 Migration Discord**! We’re glad to have you here as part of our migration process.
+
+📌 **Please read all migration rules, requirements, and timelines carefully.**
+
+➡️ **Migration Info Channel:**
+🔗 https://discord.com/channels/1456324256861257844/1456324257624887475
+
+If you have any questions after reading, feel free to reach out to the leadership team.
+
+🚀✨ **Welcome, and we look forward to building 3961 together!**`
+    );
+  } catch (err) {
+    console.error("Welcome message failed:", err);
+  }
+});
 
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
