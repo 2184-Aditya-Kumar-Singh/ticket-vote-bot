@@ -178,11 +178,24 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     const questions = [
-      { col: COLUMN.NAME, q: "📝 In-game name?" },
-      { col: COLUMN.POWER, q: "⚡ Power?" },
-      { col: COLUMN.KP, q: "⚔️ Kill points?" },
-      { col: COLUMN.VIP, q: "👑 VIP level?" }
-    ];
+  {
+    col: COLUMN.NAME,
+    q: "📝 **Please enter your in-game name**\n(Exact name as shown in Rise of Kingdoms)"
+  },
+  {
+    col: COLUMN.POWER,
+    q: "⚡ **What is your current power?**\n(You may include units like M / Million)"
+  },
+  {
+    col: COLUMN.KP,
+    q: "⚔️ **What are your total kill points?**\n(Enter the total shown in your profile)"
+  },
+  {
+    col: COLUMN.VIP,
+    q: "👑 **What is your current VIP level?**"
+  }
+];
+
 
     let step = 0;
     await interaction.reply(questions[step].q);
