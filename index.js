@@ -32,7 +32,7 @@ const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
 
 // ================= STORAGE =================
 const ticketVotes = new Map(); // ticketChannelId -> voteMessageId
-const ticketData = new Map();  // ticketChannelId -> details
+const ticketData = new Map();  // ticketChannelId -> data object
 
 // ================= GOOGLE SHEETS =================
 const auth = new google.auth.GoogleAuth({
@@ -62,64 +62,44 @@ async function writeToSheet(data, ticketName, approvedBy) {
 
 // ================= READY + COMMANDS =================
 client.once(Events.ClientReady, async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
   const commands = [
-    new SlashCommandBuilder()
-      .setName("fill-details")
-      .setDescription("Fill migration details for this ticket"),
-    new SlashCommandBuilder()
-      .setName("approve")
-      .setDescription("Approve this ticket and close voting")
+    new SlashCommandBuilder().setName("fill-details").setDescription("Fill migration details"),
+    new SlashCommandBuilder().setName("approve").setDescription("Approve this ticket")
   ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
   await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
 
-  console.log("✅ Slash commands registered");
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 // ================= WELCOME =================
 client.on(Events.GuildMemberAdd, async (member) => {
-  try {
-    const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
-    if (!ch) return;
+  const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
+  if (!ch) return;
 
-    await ch.send(
+  ch.send(
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
 Hello ${member},
-Please read all migration rules and timelines carefully.
+Please read migration rules carefully.
 
-🔗 https://discord.com/channels/1456324256861257844/1456324257624887475
-
-We look forward to building **3961** together. 🚀✨`
-    );
-  } catch (e) {
-    console.error("Welcome error:", e);
-  }
+🔗 https://discord.com/channels/1456324256861257844/1456324257624887475`
+  );
 });
 
 // ================= TICKET CREATED =================
 client.on(Events.ChannelCreate, async (channel) => {
-  try {
-    if (!channel.guild) return;
-    if (channel.parentId !== TICKET_CATEGORY_ID) return;
-    if (!channel.name.startsWith("ticket-")) return;
+  if (!channel.guild) return;
+  if (channel.parentId !== TICKET_CATEGORY_ID) return;
+  if (!channel.name.startsWith("ticket-")) return;
 
-    const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-    if (!voteChannel) return;
+  const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
+  const msg = await voteChannel.send(`🗳️ **Vote for ${channel.name.toUpperCase()}**`);
+  await msg.react("✅");
+  await msg.react("❌");
 
-    const msg = await voteChannel.send(
-      `🗳️ **Vote for ${channel.name.toUpperCase()}**`
-    );
-    await msg.react("✅");
-    await msg.react("❌");
-
-    ticketVotes.set(channel.id, msg.id);
-  } catch (e) {
-    console.error("Vote create error:", e);
-  }
+  ticketVotes.set(channel.id, msg.id);
 });
 
 // ================= CLOSE VOTE =================
@@ -127,16 +107,14 @@ async function closeVote(channel) {
   if (!ticketVotes.has(channel.id)) return;
 
   const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
-  const msgId = ticketVotes.get(channel.id);
-  const voteMsg = await voteChannel.messages.fetch(msgId);
+  const voteMsg = await voteChannel.messages.fetch(ticketVotes.get(channel.id));
 
   const yes = (voteMsg.reactions.cache.get("✅")?.count || 1) - 1;
   const no = (voteMsg.reactions.cache.get("❌")?.count || 1) - 1;
 
   await voteMsg.edit(
     `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
-    `✅ Yes: **${yes}**\n` +
-    `❌ No: **${no}**`
+    `✅ Yes: **${yes}**\n❌ No: **${no}**`
   );
 
   ticketVotes.delete(channel.id);
@@ -149,15 +127,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ---------- /fill-details ----------
   if (interaction.commandName === "fill-details") {
-    if (!channel.name.startsWith("ticket-")) {
-      return interaction.reply("❌ Use this command inside a ticket.");
+    if (ticketData.get(channel.id)?.completed) {
+      return interaction.reply("✅ Details are already completed for this ticket.");
     }
 
     const questions = [
-      { key: "name", q: "📝 **What is your in-game name?**" },
-      { key: "power", q: "⚡ **What is your current power?**" },
-      { key: "kp", q: "⚔️ **What are your total kill points?**" },
-      { key: "vip", q: "👑 **What is your VIP level?**" }
+      { key: "name", q: "📝 What is your in-game name?" },
+      { key: "power", q: "⚡ What is your current power?" },
+      { key: "kp", q: "⚔️ What are your total kill points?" },
+      { key: "vip", q: "👑 What is your VIP level?" }
     ];
 
     const answers = {};
@@ -165,11 +143,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     await interaction.reply(questions[step].q);
 
-    const filter = m =>
-      m.author.id === interaction.user.id && !m.author.bot;
-
     const collector = channel.createMessageCollector({
-      filter,
+      filter: m => m.author.id === interaction.user.id && !m.author.bot,
       time: 10 * 60 * 1000
     });
 
@@ -178,15 +153,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
       step++;
 
       if (step < questions.length) {
-        await channel.send(questions[step].q);
+        channel.send(questions[step].q);
       } else {
-        ticketData.set(channel.id, answers);
+        // ✅ FORM IS NOW OFFICIALLY COMPLETE
+        ticketData.set(channel.id, {
+          completed: true,
+          ...answers
+        });
+
         collector.stop();
 
-        await channel.send(
+        channel.send(
 `✅ **Basic details saved successfully**
 
-📸 **Now please send screenshots of:**
+📸 **Please now send screenshots of:**
 • Commanders  
 • Equipment  
 • Bag (resources & speedups)  
@@ -196,54 +176,33 @@ client.on(Events.InteractionCreate, async (interaction) => {
         );
       }
     });
-
-    collector.on("end", (_, reason) => {
-      if (reason === "time") {
-        channel.send("❌ Time expired. Please run `/fill-details` again.");
-      }
-    });
   }
 
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
-      return interaction.reply({ content: "❌ You do not have permission.", ephemeral: true });
-    }
-
-    if (!channel.name.startsWith("ticket-")) {
-      return interaction.reply({ content: "❌ Not a ticket channel.", ephemeral: true });
+      return interaction.reply({ content: "❌ No permission.", ephemeral: true });
     }
 
     const data = ticketData.get(channel.id);
-    if (!data || !data.name || !data.power || !data.kp || !data.vip) {
+    if (!data || data.completed !== true) {
       return interaction.reply({
-        content: "❌ Ticket details are incomplete. User must finish `/fill-details`.",
+        content: "❌ Form not completed yet.",
         ephemeral: true
       });
     }
 
-    try {
-      await closeVote(channel);
-      await writeToSheet(data, channel.name, interaction.user.tag);
-      await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
+    await closeVote(channel);
+    await writeToSheet(data, channel.name, interaction.user.tag);
+    await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
 
-      await interaction.reply({
-        content: "✅ Ticket approved and logged to sheet.",
-        ephemeral: true
-      });
-    } catch (e) {
-      console.error("Approve error:", e);
-      interaction.reply({ content: "❌ Approval failed.", ephemeral: true });
-    }
+    interaction.reply({ content: "✅ User approved and logged.", ephemeral: true });
   }
 });
 
-// ================= BACKUP CLOSE =================
+// ================= BACKUP MOVE =================
 client.on(Events.ChannelUpdate, async (oldC, newC) => {
-  if (
-    oldC.parentId === TICKET_CATEGORY_ID &&
-    newC.parentId !== TICKET_CATEGORY_ID
-  ) {
+  if (oldC.parentId === TICKET_CATEGORY_ID && newC.parentId !== TICKET_CATEGORY_ID) {
     await closeVote(newC);
   }
 });
