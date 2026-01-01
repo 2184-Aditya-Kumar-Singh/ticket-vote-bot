@@ -31,8 +31,7 @@ const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
 
 // ================= STORAGE =================
-const ticketVotes = new Map(); // ticketChannelId -> voteMessageId
-const ticketData = new Map();  // ticketChannelId -> data object
+const ticketVotes = new Map();
 
 // ================= GOOGLE SHEETS =================
 const auth = new google.auth.GoogleAuth({
@@ -60,7 +59,24 @@ async function writeToSheet(data, ticketName, approvedBy) {
   });
 }
 
-// ================= READY + COMMANDS =================
+// ================= UTIL =================
+function parseTopicData(topic) {
+  if (!topic || !topic.includes("FORM_COMPLETED")) return null;
+
+  const data = {};
+  topic.split("|").forEach(part => {
+    const [k, v] = part.split(":").map(s => s?.trim());
+    if (!v) return;
+    if (k === "Name") data.name = v;
+    if (k === "Power") data.power = v;
+    if (k === "KP") data.kp = v;
+    if (k === "VIP") data.vip = v;
+  });
+
+  return data;
+}
+
+// ================= READY =================
 client.once(Events.ClientReady, async () => {
   const commands = [
     new SlashCommandBuilder().setName("fill-details").setDescription("Fill migration details"),
@@ -75,17 +91,19 @@ client.once(Events.ClientReady, async () => {
 
 // ================= WELCOME =================
 client.on(Events.GuildMemberAdd, async (member) => {
-  const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
-  if (!ch) return;
+  try {
+    const ch = await member.guild.channels.fetch(WELCOME_CHANNEL_ID);
+    if (!ch) return;
 
-  ch.send(
+    ch.send(
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
 Hello ${member},
-Please read migration rules carefully.
+Please read all migration rules carefully.
 
 🔗 https://discord.com/channels/1456324256861257844/1456324257624887475`
-  );
+    );
+  } catch {}
 });
 
 // ================= TICKET CREATED =================
@@ -127,15 +145,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ---------- /fill-details ----------
   if (interaction.commandName === "fill-details") {
-    if (ticketData.get(channel.id)?.completed) {
-      return interaction.reply("✅ Details are already completed for this ticket.");
+    if (channel.topic?.includes("FORM_COMPLETED")) {
+      return interaction.reply("✅ Details already completed for this ticket.");
     }
 
     const questions = [
-      { key: "name", q: "📝 What is your in-game name?" },
-      { key: "power", q: "⚡ What is your current power?" },
-      { key: "kp", q: "⚔️ What are your total kill points?" },
-      { key: "vip", q: "👑 What is your VIP level?" }
+      { key: "name", q: "📝 **What is your in-game name?**" },
+      { key: "power", q: "⚡ **What is your current power?**" },
+      { key: "kp", q: "⚔️ **What are your total kill points?**" },
+      { key: "vip", q: "👑 **What is your VIP level?**" }
     ];
 
     const answers = {};
@@ -155,11 +173,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (step < questions.length) {
         channel.send(questions[step].q);
       } else {
-        // ✅ FORM IS NOW OFFICIALLY COMPLETE
-        ticketData.set(channel.id, {
-          completed: true,
-          ...answers
-        });
+        await channel.setTopic(
+          `FORM_COMPLETED | Name:${answers.name} | Power:${answers.power} | KP:${answers.kp} | VIP:${answers.vip}`
+        );
 
         collector.stop();
 
@@ -184,8 +200,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       return interaction.reply({ content: "❌ No permission.", ephemeral: true });
     }
 
-    const data = ticketData.get(channel.id);
-    if (!data || data.completed !== true) {
+    const data = parseTopicData(channel.topic);
+    if (!data) {
       return interaction.reply({
         content: "❌ Form not completed yet.",
         ephemeral: true
@@ -196,7 +212,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await writeToSheet(data, channel.name, interaction.user.tag);
     await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
 
-    interaction.reply({ content: "✅ User approved and logged.", ephemeral: true });
+    interaction.reply({ content: "✅ Ticket approved and logged.", ephemeral: true });
   }
 });
 
