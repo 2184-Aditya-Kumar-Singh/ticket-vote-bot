@@ -14,27 +14,27 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent // ✅ REQUIRED
+    GatewayIntentBits.MessageContent
   ],
   partials: [Partials.Channel, Partials.Message]
 });
 
-
 // ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
+const REJECTED_CATEGORY_ID = process.env.REJECTED_CATEGORY_ID;
 const APPROVE_ROLE_ID = process.env.MOVE_ROLE_ID;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
 
-// ================= GOOGLE AUTH =================
+// ================= GOOGLE =================
 const auth = new google.auth.GoogleAuth({
   credentials: JSON.parse(GOOGLE_CREDS),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"]
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-// ================= COLUMN MAP (SAFE) =================
+// ================= COLUMN MAP =================
 const COLUMN = {
   TICKET_ID: "A",
   NAME: "B",
@@ -70,21 +70,18 @@ async function createRow(ticketId) {
         "", "", "", "",
         "PENDING",
         "", "",
-        "" // Discord User will be set explicitly
+        ""
       ]]
     }
   });
 }
-
 
 async function updateCell(row, column, value) {
   await sheets.spreadsheets.values.update({
     spreadsheetId: GOOGLE_SHEET_ID,
     range: `Sheet1!${column}${row}`,
     valueInputOption: "USER_ENTERED",
-    requestBody: {
-      values: [[value]]
-    }
+    requestBody: { values: [[value]] }
   });
 }
 
@@ -94,10 +91,20 @@ client.once(Events.ClientReady, async () => {
     new SlashCommandBuilder()
       .setName("fill-details")
       .setDescription("Fill migration details"),
+
     new SlashCommandBuilder()
       .setName("approve")
-      .setDescription("Approve this ticket")
-  ].map(cmd => cmd.toJSON());
+      .setDescription("Approve this ticket"),
+
+    new SlashCommandBuilder()
+      .setName("reject")
+      .setDescription("Reject this ticket")
+      .addStringOption(opt =>
+        opt.setName("reason")
+          .setDescription("Reason for rejection (optional)")
+          .setRequired(false)
+      )
+  ].map(c => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
   await rest.put(
@@ -120,16 +127,15 @@ client.on(Events.InteractionCreate, async (interaction) => {
     let row = await findRow(ticketId);
 
     if (!row) {
-  await createRow(ticketId);
-  row = await findRow(ticketId);
+      await createRow(ticketId);
+      row = await findRow(ticketId);
 
-  await updateCell(
-    row,
-    COLUMN.DISCORD_USER,
-    interaction.user.username
-  );
-}
-
+      await updateCell(
+        row,
+        COLUMN.DISCORD_USER,
+        interaction.user.username
+      );
+    }
 
     const questions = [
       { col: COLUMN.NAME, q: "📝 What is your in-game name?" },
@@ -147,9 +153,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     });
 
     collector.on("collect", async (msg) => {
-      // ✅ SAVE EXACT TEXT (spaces, words, numbers — everything)
       await updateCell(row, questions[step].col, msg.content);
-
       step++;
 
       if (step < questions.length) {
@@ -159,13 +163,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
         channel.send(
 `✅ **Details saved successfully**
 
-📸 Please now send screenshots of:
-• Commanders  
-• Equipment  
-• Bag (resources & speedups)  
-• ROK profile (ID visible)
-
-⏳ Please wait for Migration Officers to respond.`
+📸 Please send required screenshots.
+⏳ Wait for Migration Officers.`
         );
       }
     });
@@ -174,36 +173,54 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
-      return interaction.reply({
-        content: "❌ You do not have permission.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
     }
 
     const row = await findRow(ticketId);
     if (!row) {
-      return interaction.reply({
-        content: "❌ Ticket data not found.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ Ticket not found", ephemeral: true });
     }
 
-    const approverName =
+    const officer =
       interaction.member.globalName ||
       interaction.user.globalName ||
       interaction.user.username;
 
     await updateCell(row, COLUMN.STATUS, "APPROVED");
-    await updateCell(row, COLUMN.APPROVED_BY, approverName);
+    await updateCell(row, COLUMN.APPROVED_BY, officer);
     await updateCell(row, COLUMN.APPROVED_AT, new Date().toLocaleString());
 
     await channel.setParent(CLOSED_CATEGORY_ID);
-    interaction.reply({
-      content: "✅ Ticket approved and logged.",
-      ephemeral: true
-    });
+    interaction.reply({ content: "✅ Ticket approved", ephemeral: true });
+  }
+
+  // ---------- /reject ----------
+  if (interaction.commandName === "reject") {
+    if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
+    }
+
+    const reason = interaction.options.getString("reason") || "No reason provided";
+    const row = await findRow(ticketId);
+
+    if (!row) {
+      return interaction.reply({ content: "❌ Ticket not found", ephemeral: true });
+    }
+
+    const officer =
+      interaction.member.globalName ||
+      interaction.user.globalName ||
+      interaction.user.username;
+
+    await updateCell(row, COLUMN.STATUS, "REJECTED");
+    await updateCell(row, COLUMN.APPROVED_BY, officer);
+    await updateCell(row, COLUMN.APPROVED_AT, new Date().toLocaleString());
+
+    await channel.send(`❌ **Ticket rejected**\nReason: ${reason}`);
+    await channel.setParent(REJECTED_CATEGORY_ID);
+
+    interaction.reply({ content: "🚫 Ticket rejected", ephemeral: true });
   }
 });
 
-// ================= LOGIN =================
 client.login(BOT_TOKEN);
