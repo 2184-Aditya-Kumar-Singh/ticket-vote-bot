@@ -14,18 +14,15 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions
+    GatewayIntentBits.GuildMessages
   ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction]
+  partials: [Partials.Channel]
 });
 
 // ================= ENV =================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
 const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID;
-const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
-const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
 const APPROVE_ROLE_ID = process.env.MOVE_ROLE_ID;
 const GOOGLE_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const GOOGLE_CREDS = process.env.GOOGLE_CREDS;
@@ -37,43 +34,46 @@ const auth = new google.auth.GoogleAuth({
 });
 const sheets = google.sheets({ version: "v4", auth });
 
-async function writeToSheet(data, ticketName, approver) {
-  const approvedBy =
-    approver.globalName ||
-    approver.user.globalName ||
-    approver.user.username;
-
+// ================= HELPERS =================
+async function appendTicketRow(ticketId, discordUser) {
   await sheets.spreadsheets.values.append({
     spreadsheetId: GOOGLE_SHEET_ID,
-    range: "Sheet1!A:G",
+    range: "Sheet1!A:I",
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
-        data.name,
-        data.power,
-        data.kp,
-        data.vip,
-        ticketName,
-        approvedBy,
-        new Date().toLocaleString()
+        ticketId,
+        "", "", "", "",
+        "PENDING",
+        "",
+        "",
+        discordUser
       ]]
     }
   });
 }
 
-// ================= UTIL =================
-function parseTopic(topic) {
-  if (!topic) return null;
-  const data = {};
-  topic.split("|").forEach(p => {
-    const [k, v] = p.split(":").map(s => s?.trim());
-    if (!v) return;
-    if (k === "Name") data.name = v;
-    if (k === "Power") data.power = v;
-    if (k === "KP") data.kp = v;
-    if (k === "VIP") data.vip = v;
+async function updateTicketField(ticketId, columnIndex, value) {
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: "Sheet1!A:A"
   });
-  return data;
+
+  const rowIndex = res.data.values.findIndex(
+    r => r[0] === ticketId
+  );
+
+  if (rowIndex === -1) return;
+
+  const rowNumber = rowIndex + 1;
+  const columnLetter = String.fromCharCode(65 + columnIndex);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: GOOGLE_SHEET_ID,
+    range: `Sheet1!${columnLetter}${rowNumber}`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[value]] }
+  });
 }
 
 // ================= READY =================
@@ -89,6 +89,17 @@ client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
+// ================= TICKET CREATED =================
+client.on(Events.ChannelCreate, async (channel) => {
+  if (channel.parentId !== TICKET_CATEGORY_ID) return;
+  if (!channel.name.startsWith("ticket-")) return;
+
+  await appendTicketRow(
+    channel.name,
+    channel.guild.members.cache.get(channel.creatorId)?.user.username || "Unknown"
+  );
+});
+
 // ================= SLASH COMMANDS =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
@@ -96,52 +107,34 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   // ---------- /fill-details ----------
   if (interaction.commandName === "fill-details") {
-    if (channel.topic?.includes("FORM_COMPLETED")) {
-      return interaction.reply("✅ Details already completed.");
-    }
-
-    const steps = [
-      { key: "Name", q: "📝 What is your in-game name?" },
-      { key: "Power", q: "⚡ What is your current power?" },
-      { key: "KP", q: "⚔️ What are your total kill points?" },
-      { key: "VIP", q: "👑 What is your VIP level?" }
+    const questions = [
+      { col: 1, q: "📝 What is your in-game name?" },
+      { col: 2, q: "⚡ What is your current power?" },
+      { col: 3, q: "⚔️ What are your total kill points?" },
+      { col: 4, q: "👑 What is your VIP level?" }
     ];
 
-    let index = 0;
-    await interaction.reply(steps[index].q);
+    let step = 0;
+    await interaction.reply(questions[step].q);
 
     const collector = channel.createMessageCollector({
-      filter: m => m.author.id === interaction.user.id && !m.author.bot,
+      filter: m => m.author.id === interaction.user.id,
       time: 10 * 60 * 1000
     });
 
     collector.on("collect", async (msg) => {
-      index++;
+      await updateTicketField(channel.name, questions[step].col, msg.content);
+      step++;
 
-      const existing = parseTopic(channel.topic) || {};
-      existing[steps[index - 1].key.toLowerCase()] = msg.content.trim();
-
-      const topic =
-        `Name:${existing.name || ""} | Power:${existing.power || ""} | KP:${existing.kp || ""} | VIP:${existing.vip || ""}`;
-
-      await channel.setTopic(topic);
-
-      if (index < steps.length) {
-        channel.send(steps[index].q);
+      if (step < questions.length) {
+        channel.send(questions[step].q);
       } else {
-        await channel.setTopic(`FORM_COMPLETED | ${topic}`);
         collector.stop();
-
         channel.send(
-`✅ **Basic details saved successfully**
+`✅ **Details saved**
 
-📸 Please now send screenshots of:
-• Commanders
-• Equipment
-• Bag (resources & speedups)
-• ROK profile (ID visible)
-
-⏳ Please wait for Migration Officers to respond.`
+📸 Please send screenshots of commanders, equipment, bag & profile.
+⏳ Wait for migration officers to respond.`
         );
       }
     });
@@ -150,18 +143,20 @@ client.on(Events.InteractionCreate, async (interaction) => {
   // ---------- /approve ----------
   if (interaction.commandName === "approve") {
     if (!interaction.member.roles.cache.has(APPROVE_ROLE_ID)) {
-      return interaction.reply({ content: "❌ No permission.", ephemeral: true });
+      return interaction.reply({ content: "❌ No permission", ephemeral: true });
     }
 
-    const data = parseTopic(channel.topic);
-    if (!data || !channel.topic.includes("FORM_COMPLETED")) {
-      return interaction.reply({ content: "❌ Form not completed.", ephemeral: true });
-    }
+    await updateTicketField(channel.name, 5, "APPROVED");
+    await updateTicketField(channel.name, 6,
+      interaction.member.globalName ||
+      interaction.user.username
+    );
+    await updateTicketField(channel.name, 7,
+      new Date().toLocaleString()
+    );
 
-    await writeToSheet(data, channel.name, interaction.member);
-    await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
-
-    interaction.reply({ content: "✅ Ticket approved and logged.", ephemeral: true });
+    await channel.setParent(CLOSED_CATEGORY_ID);
+    interaction.reply({ content: "✅ Ticket approved", ephemeral: true });
   }
 });
 
