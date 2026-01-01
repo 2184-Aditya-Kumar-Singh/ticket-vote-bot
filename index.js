@@ -1,4 +1,12 @@
-const { Client, GatewayIntentBits, Partials, Events } = require("discord.js");
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  Events,
+  REST,
+  Routes,
+  SlashCommandBuilder
+} = require("discord.js");
 
 const client = new Client({
   intents: [
@@ -10,18 +18,41 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-// ===== CONFIG =====
+// ===== ENV CONFIG =====
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID;
+const TICKET_CATEGORY_ID = process.env.TICKET_CATEGORY_ID; // open tickets
+const CLOSED_CATEGORY_ID = process.env.CLOSED_CATEGORY_ID; // closed tickets
 const VOTE_CHANNEL_ID = process.env.VOTE_CHANNEL_ID;
 const WELCOME_CHANNEL_ID = process.env.WELCOME_CHANNEL_ID;
-// ==================
+const MOVE_ROLE_ID = process.env.MOVE_ROLE_ID;
+// ======================
 
 // ticketChannelId -> voteMessageId
 const ticketVotes = new Map();
 
-client.once(Events.ClientReady, () => {
+// ===============================
+// ✅ BOT READY + REGISTER COMMAND
+// ===============================
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+
+  const commands = [
+    new SlashCommandBuilder()
+      .setName("move")
+      .setDescription("Move this ticket to the closed category")
+  ].map(cmd => cmd.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(BOT_TOKEN);
+
+  try {
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    console.log("✅ Slash command /move registered");
+  } catch (err) {
+    console.error("❌ Slash command registration error:", err);
+  }
 });
 
 // ===============================
@@ -74,12 +105,12 @@ client.on(Events.ChannelCreate, async (channel) => {
 
     ticketVotes.set(channel.id, voteMessage.id);
   } catch (err) {
-    console.error("❌ Error creating vote:", err);
+    console.error("❌ Vote creation error:", err);
   }
 });
 
 // ==================================
-// 🔒 TICKET CLOSED → CLOSE VOTE
+// 🔒 TICKET MOVED → CLOSE VOTE
 // ==================================
 client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
   try {
@@ -109,7 +140,47 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
       ticketVotes.delete(oldChannel.id);
     }
   } catch (err) {
-    console.error("❌ Error closing vote:", err);
+    console.error("❌ Vote close error:", err);
+  }
+});
+
+// ===============================
+// 🔧 /MOVE SLASH COMMAND
+// ===============================
+client.on(Events.InteractionCreate, async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+  if (interaction.commandName !== "move") return;
+
+  const member = interaction.member;
+  const channel = interaction.channel;
+
+  if (!member.roles.cache.has(MOVE_ROLE_ID)) {
+    return interaction.reply({
+      content: "❌ You do not have permission to use this command.",
+      ephemeral: true
+    });
+  }
+
+  if (!channel.name.startsWith("ticket-")) {
+    return interaction.reply({
+      content: "❌ This command can only be used in ticket channels.",
+      ephemeral: true
+    });
+  }
+
+  try {
+    await channel.setParent(CLOSED_CATEGORY_ID, { lockPermissions: false });
+
+    await interaction.reply({
+      content: "✅ Ticket moved successfully.",
+      ephemeral: true
+    });
+  } catch (err) {
+    console.error("❌ Ticket move error:", err);
+    interaction.reply({
+      content: "❌ Failed to move ticket.",
+      ephemeral: true
+    });
   }
 });
 
