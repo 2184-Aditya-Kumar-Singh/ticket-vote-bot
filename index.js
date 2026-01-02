@@ -104,7 +104,7 @@ Welcome to **3961 Migration Discord**! We’re glad to have you here as part of 
 
 If you have any questions after reading, feel free to reach out to the leadership team.
 
-🚀✨ **Welcome, and we look forward to building 3961 together!**
+🚀✨ **Welcome, and we look forward to building 3961 together!**`
     );
   } catch (e) {
     console.error("Welcome failed:", e);
