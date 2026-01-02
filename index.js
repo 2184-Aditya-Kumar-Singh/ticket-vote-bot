@@ -94,7 +94,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
     await channel.send(
 `👑 **Welcome to Kingdom 3961 Migration Discord** 👑
 
-Hello <@1388225143997726771>,
+Hello ${member},
 Welcome to **3961 Migration Discord**! We’re glad to have you here as part of our migration process.
 
 📌 **Please read all migration rules, requirements, and timelines carefully.**
