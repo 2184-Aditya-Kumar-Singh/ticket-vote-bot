@@ -155,10 +155,13 @@ async function closeVote(channel) {
 
   const voteChannel = await channel.guild.channels.fetch(VOTE_CHANNEL_ID);
   const msg = await voteChannel.messages.fetch(voteMsgId);
-
-  const yes = (msg.reactions.cache.get("✅")?.count || 1) - 1;
-  const no = (msg.reactions.cache.get("❌")?.count || 1) - 1;
-
+  const yes = msg.reactions.cache.get("✅")
+        ? (await msg.reactions.cache.get("✅").users.fetch()).size - 1
+        : 0;
+      const no = msg.reactions.cache.get("❌")
+        ? (await msg.reactions.cache.get("❌").users.fetch()).size - 1
+        : 0;
+  
   await msg.edit(
     `🔒 **VOTING CLOSED — ${channel.name.toUpperCase()}**\n\n` +
     `✅ Yes: ${yes}\n❌ No: ${no}`
