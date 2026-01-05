@@ -45,14 +45,16 @@ const sheets = google.sheets({ version: "v4", auth });
 const COLUMN = {
   TICKET_ID: "A",
   NAME: "B",
-  POWER: "C",
-  KP: "D",
-  VIP: "E",
-  STATUS: "F",
-  APPROVED_BY: "G",
-  APPROVED_AT: "H",
-  DISCORD_USER: "I"
+  GOVERNOR_ID: "C",   // 🆕
+  POWER: "D",
+  KP: "E",
+  VIP: "F",
+  STATUS: "G",
+  APPROVED_BY: "H",
+  APPROVED_AT: "I",
+  DISCORD_USER: "J"
 };
+
 
 // ================= SHEET HELPERS =================
 async function findRow(ticketId) {
@@ -71,7 +73,7 @@ async function createRow(ticketId) {
     range: "Sheet1!A:I",
     valueInputOption: "USER_ENTERED",
     requestBody: {
-      values: [[ticketId, "", "", "", "", "PENDING", "", "", ""]]
+      values: [[ticketId, "", "", "", "", "", "PENDING", "", "", ""]]
     }
   });
 }
@@ -187,6 +189,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
     q: "📝 **Please enter your in-game name**\n(Exact name as shown in Rise of Kingdoms)"
   },
   {
+    col: COLUMN.GOVERNOR_ID,
+    q: "🆔 **Please enter your Governor ID**\n(You can find this in your ROK profile)"
+  },
+  {
     col: COLUMN.POWER,
     q: "⚡ **What is your current power?**\n(You may include units like M / Million)"
   },
@@ -199,6 +205,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     q: "👑 **What is your current VIP level?**"
   }
 ];
+
 
 
     let step = 0;
